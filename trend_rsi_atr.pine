@@ -1,0 +1,107 @@
+//@version=6
+// ─────────────────────────────────────────────────────────
+// 전략 3: 추세 + RSI + ATR 손절 (3축 결합)
+//
+// 세 축이 각각 다른 질문에 답한다:
+//   축1 추세(이평선) — 큰 방향이 어디인가
+//   축2 과매도(RSI)  — 눌렸다가 돌아서는가
+//   축3 변동성(ATR)  — 손절/익절 폭을 얼마로 둘 것인가
+//
+// 역할이 겹치지 않는 지표를 묶는 것이 핵심이다.
+// 이평선+MACD+스토캐스틱처럼 셋 다 "지금 오르나"를 묻는
+// 조합은 겹치기만 하고 얻는 게 없다.
+//
+// ※ 조건을 늘리면 승률은 오르지만 매매 횟수가 줄고,
+//    시도할 수 있는 파라미터 조합이 폭증해서
+//    과최적화 위험이 커진다. 조건은 적을수록 좋다.
+// ─────────────────────────────────────────────────────────
+
+strategy("Trend+RSI+ATR", overlay = true,
+     initial_capital       = 10000,
+     default_qty_type      = strategy.percent_of_equity,
+     default_qty_value     = 10,
+     commission_type       = strategy.commission.percent,
+     commission_value      = 0.055,
+     slippage              = 2)
+
+trendLen = input.int(100,   "추세 판단 이평선", minval = 20)
+rsiLen   = input.int(14,    "RSI 기간",         minval = 2)
+buyLv    = input.int(40,    "매수 기준 RSI",    minval = 5, maxval = 60)
+atrLen   = input.int(14,    "ATR 기간",         minval = 2)
+slMult   = input.float(2.0, "손절 = ATR x",     minval = 0.5, step = 0.5)
+tpMult   = input.float(4.0, "익절 = ATR x",     minval = 0.5, step = 0.5)
+
+// ── 세 축 ──
+trendUp = close > ta.sma(close, trendLen)   // 축1
+r       = ta.rsi(close, rsiLen)
+dipBuy  = ta.crossover(r, buyLv)            // 축2
+atr     = ta.atr(atrLen)                    // 축3
+
+// ── 진입: 두 조건이 동시에 참일 때만 ──
+if trendUp and dipBuy and strategy.position_size == 0
+    strategy.entry("Long", strategy.long)
+
+// ── 청산: 진입가 기준 ATR 배수로 손절/익절 ──
+// ATR을 쓰는 이유: "3% 손절" 같은 고정값은 변동성 큰 종목엔
+// 너무 좁고 안정적인 종목엔 너무 넓다. ATR 배수는 종목이
+// 알아서 맞춰준다.
+if strategy.position_size > 0
+    e  = strategy.position_avg_price
+    sl = e - atr * slMult
+    tp = e + atr * tpMult
+    strategy.exit("Exit", "Long", stop = sl, limit = tp)
+
+plot(ta.sma(close, trendLen), "추세선", color = color.gray)
+
+// ─────────────────────────────────────────────────────────
+// 결과 라벨
+// ─────────────────────────────────────────────────────────
+f(x) => str.tostring(x, "#.##")
+
+var label lb = na
+
+if barstate.islast
+    float bigWin  = 0
+    float fees    = 0
+    float sumWin  = 0
+    float sumLoss = 0
+
+    if strategy.closedtrades > 0
+        for i = 0 to strategy.closedtrades - 1
+            p = strategy.closedtrades.profit(i)
+            bigWin := math.max(bigWin, p)
+            fees   := fees + strategy.closedtrades.commission(i)
+            if p > 0
+                sumWin  := sumWin  + p
+            else
+                sumLoss := sumLoss + math.abs(p)
+
+    net     = strategy.netprofit
+    netPct  = net / strategy.initial_capital * 100
+    ddPct   = strategy.max_drawdown / strategy.initial_capital * 100
+    winN    = strategy.wintrades
+    lossN   = strategy.losstrades
+    winPct  = strategy.closedtrades > 0 ? winN / strategy.closedtrades * 100 : 0
+    avgWin  = winN  > 0 ? sumWin  / winN  : 0
+    avgLoss = lossN > 0 ? sumLoss / lossN : 0
+    ratio   = avgLoss > 0 ? avgWin / avgLoss : 0
+    expect  = winPct / 100 * ratio
+
+    txt = "순수익: " + f(net) + " (" + f(netPct) + "%)"
+       + "\n매매 횟수: " + str.tostring(strategy.closedtrades)
+       + "\n승률: " + f(winPct) + "%"
+       + "\n최대 낙폭: " + f(ddPct) + "%"
+       + "\n평균 수익: " + f(avgWin)
+       + "\n평균 손실: " + f(avgLoss)
+       + "\n손익비: " + f(ratio)
+       + "\n기대값(승률x손익비): " + f(expect) + "   (1 미만이면 구조적으로 못 버팀)"
+       + "\n최대 수익 거래: " + f(bigWin)
+       + "\n그 한 번 빼면: " + f(net - bigWin)
+       + "\n총 수수료: " + f(fees)
+
+    label.delete(lb)
+    lb := label.new(bar_index, high * 1.05, txt,
+         style     = label.style_label_lower_left,
+         color     = color.white,
+         textcolor = color.black,
+         size      = size.normal)

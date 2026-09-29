@@ -1,0 +1,95 @@
+//@version=6
+// ─────────────────────────────────────────────────────────
+// 도구: 빗각 평행채널 격자 (Angle Channel Grid)
+//
+// 손으로 그은 장기 빗각을 코드로 옮겨, 같은 폭의 평행선을
+// 위아래로 무한히 복제해 격자로 만든다.
+//
+// 필요한 좌표 3개:
+//   1) 고점1  — 기울기를 만드는 첫 점
+//   2) 고점2  — 기울기를 만드는 둘째 점
+//   3) 조정저점 — 이 점에서 고점선까지의 수직거리 = 채널 폭 1칸
+//
+// ※ 선형(Linear) 스케일 차트 기준. 로그 차트에서는
+//    폭을 가격차가 아니라 배율로 계산해야 등간격으로 보인다.
+//
+// ※ 시간(time) 기준으로 계산하므로 주봉에서 그린 선이
+//    일봉·4시간봉·1시간봉에서 정확히 같은 자리에 나온다.
+//    (봉 개수 기준으로 짜면 시간대를 바꿀 때 선이 어긋난다)
+//
+// 기본값은 BTCUSD 주봉 예시. 종목을 바꾸면 톱니바퀴에서
+// 좌표 6개를 갈아끼우면 된다.
+// ─────────────────────────────────────────────────────────
+
+indicator("빗각 채널 격자", overlay = true, max_lines_count = 200)
+
+// ── 고점선을 만드는 두 점 ──
+p1t = input.time(timestamp("2017-12-11T00:00:00"), "고점1 날짜")
+p1p = input.float(19891.99, "고점1 가격")
+p2t = input.time(timestamp("2021-04-12T00:00:00"), "고점2 날짜")
+p2p = input.float(64899.0,  "고점2 가격")
+
+// ── 채널 폭을 결정하는 조정 저점 ──
+p3t = input.time(timestamp("2021-06-21T00:00:00"), "조정저점 날짜")
+p3p = input.float(28800.0,  "조정저점 가격")
+
+upN  = input.int(2,  "기준선 위로 몇 칸",   minval = 0, maxval = 10)
+dnN  = input.int(5,  "기준선 아래로 몇 칸", minval = 0, maxval = 10)
+half = input.bool(true, "0.5 중간선 표시")
+back = input.int(300, "왼쪽으로 몇 봉까지", minval = 50, maxval = 4000)
+
+// ── 직선 방정식: 두 점을 지나는 선 ──
+slope = (p2p - p1p) / (p2t - p1t)
+lineAt(t) => p1p + slope * (t - p1t)
+
+base  = lineAt(time)             // 현재 봉에서 기준선(고점선)의 값
+width = lineAt(p3t) - p3p        // 채널 폭 = 고점선과 조정저점의 수직거리
+
+// ── 격자 그리기 ──
+// 정수 칸은 실선, 0.5 칸은 점선. 기준선만 빨간 굵은 선.
+var line[] grid = array.new_line()
+
+if barstate.islast
+    for ln in grid
+        line.delete(ln)
+    array.clear(grid)
+
+    t1 = time[back]
+    t2 = time + 60 * 60 * 24 * 365 * 1000    // 오른쪽으로 1년 연장
+
+    step = half ? 0.5 : 1.0
+    float k = -dnN                            // float으로 선언해야 0.5씩 더할 수 있다
+
+    while k <= upN
+        isWhole = math.round(k) == k
+        col = k == 0        ? color.red
+             : isWhole      ? color.new(color.blue, 30)
+             :                color.new(color.gray, 60)
+        sty = isWhole ? line.style_solid : line.style_dotted
+        w   = k == 0  ? 2 : 1
+
+        l = line.new(t1, lineAt(t1) + width * k,
+                     t2, lineAt(t2) + width * k,
+                     xloc  = xloc.bar_time,
+                     color = col, style = sty, width = w)
+        array.push(grid, l)
+        k := k + step
+
+// ── 현재 위치 라벨 ──
+var label lb = na
+
+if barstate.islast
+    pos      = (close - base) / width
+    lowerHalf = math.floor(pos * 2) / 2       // 바로 아래 0.5 눈금
+    upperHalf = lowerHalf + 0.5
+
+    txt = "현재 위치: " + str.tostring(pos, "#.##") + "칸"
+       + "\n폭(1칸): "  + str.tostring(width, "#")
+       + "\n바로 위: "  + str.tostring(base + width * upperHalf, "#")
+       + "\n바로 아래: " + str.tostring(base + width * lowerHalf, "#")
+
+    label.delete(lb)
+    lb := label.new(bar_index, close, txt,
+         style     = label.style_label_left,
+         color     = color.white,
+         textcolor = color.black)
